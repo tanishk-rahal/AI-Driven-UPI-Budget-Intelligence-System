@@ -18,6 +18,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.budgetmanager.R
+import com.example.budgetmanager.ui.payment.PaymentActivity
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.ExecutorService
@@ -89,9 +90,10 @@ class ScanActivity : AppCompatActivity() {
                                     for (barcode in barcodes) {
                                         val rawValue = barcode.rawValue
                                         if (rawValue != null) {
-                                            val intent = Intent()
+                                            // Launch PaymentActivity directly as requested
+                                            val intent = Intent(this, PaymentActivity::class.java)
                                             intent.putExtra("scanned_data", rawValue)
-                                            setResult(RESULT_OK, intent)
+                                            startActivity(intent)
                                             finish()
                                         }
                                     }

@@ -8,6 +8,13 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="upi" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -33,6 +40,10 @@
             android:name=".ui.scan.ScanActivity"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <activity
+            android:name=".ui.payment.PaymentActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.BudgetManager" />
     </application>
 
 </manifest>
