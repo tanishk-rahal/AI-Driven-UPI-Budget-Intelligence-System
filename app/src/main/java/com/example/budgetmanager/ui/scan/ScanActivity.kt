@@ -4,30 +4,41 @@ import android.Manifest
 import android.animation.ObjectAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.ImageView
 import android.widget.Toast
+import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.budgetmanager.R
 import com.example.budgetmanager.ui.payment.PaymentActivity
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class ScanActivity : AppCompatActivity() {
 
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var cameraPreview: PreviewView
+    private var camera: Camera? = null
+    
+    // Scanner set to handle all formats to be more robust
+    private val scanner = BarcodeScanning.getClient(
+        BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
+            .build()
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,30 +50,34 @@ class ScanActivity : AppCompatActivity() {
         if (allPermissionsGranted()) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(
-                this,
-                REQUIRED_PERMISSIONS,
-                REQUEST_CODE_PERMISSIONS
-            )
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
         }
 
-        val backButton = findViewById<ImageView>(R.id.back_button)
-        backButton.setOnClickListener {
-            finish()
-        }
+        findViewById<ImageView>(R.id.back_button).setOnClickListener { finish() }
 
+        // Scanning line animation
         val scanLine = findViewById<View>(R.id.scan_line)
-        val animator = ObjectAnimator.ofFloat(scanLine, "translationY", 0f, 250f * resources.displayMetrics.density)
-        animator.duration = 1500
-        animator.repeatCount = ObjectAnimator.INFINITE
-        animator.repeatMode = ObjectAnimator.REVERSE
-        animator.start()
+        ObjectAnimator.ofFloat(scanLine, "translationY", 0f, 600f).apply {
+            duration = 2000
+            repeatCount = ObjectAnimator.INFINITE
+            repeatMode = ObjectAnimator.REVERSE
+            start()
+        }
+        
+        // Tap to focus
+        cameraPreview.setOnTouchListener { _, event ->
+            val factory = cameraPreview.meteringPointFactory
+            val point = factory.createPoint(event.x, event.y)
+            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                .build()
+            camera?.cameraControl?.startFocusAndMetering(action)
+            true
+        }
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(
-            baseContext, it
-        ) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun startCamera() {
@@ -71,40 +86,16 @@ class ScanActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(cameraPreview.surfaceProvider)
-                }
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(cameraPreview.surfaceProvider)
+            }
 
             val imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
                     it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        val mediaImage = imageProxy.image
-                        if (mediaImage != null) {
-                            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                            val scanner = BarcodeScanning.getClient()
-                            scanner.process(image)
-                                .addOnSuccessListener { barcodes ->
-                                    for (barcode in barcodes) {
-                                        val rawValue = barcode.rawValue
-                                        if (rawValue != null) {
-                                            // Launch PaymentActivity directly as requested
-                                            val intent = Intent(this, PaymentActivity::class.java)
-                                            intent.putExtra("scanned_data", rawValue)
-                                            startActivity(intent)
-                                            finish()
-                                        }
-                                    }
-                                }
-                                .addOnFailureListener {
-                                    Log.e(TAG, "Barcode scanning failed", it)
-                                }
-                                .addOnCompleteListener {
-                                    imageProxy.close()
-                                }
-                        }
+                        processImageProxy(imageProxy)
                     }
                 }
 
@@ -112,43 +103,79 @@ class ScanActivity : AppCompatActivity() {
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                camera = cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, imageAnalyzer
                 )
+                // Enable Auto Focus if available
+                camera?.cameraControl?.enableTorch(false)
             } catch (exc: Exception) {
-                Log.e(TAG, "Use case binding failed", exc)
+                Log.e("ScanActivity", "Use case binding failed", exc)
             }
 
         }, ContextCompat.getMainExecutor(this))
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray
-    ) {
+    @OptIn(ExperimentalGetImage::class)
+    private fun processImageProxy(imageProxy: ImageProxy) {
+        val mediaImage = imageProxy.image
+        if (mediaImage != null) {
+            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            scanner.process(image)
+                .addOnSuccessListener { barcodes ->
+                    if (barcodes.isNotEmpty()) {
+                        val rawValue = barcodes[0].rawValue
+                        if (rawValue != null) {
+                            runOnUiThread { handleScannedData(rawValue) }
+                        }
+                    }
+                }
+                .addOnFailureListener { Log.e("ScanActivity", "Scan failed", it) }
+                .addOnCompleteListener { imageProxy.close() }
+        } else {
+            imageProxy.close()
+        }
+    }
+
+    private fun handleScannedData(data: String) {
+        Log.d("ScanActivity", "Data: $data")
+        
+        val intent = Intent(this, PaymentActivity::class.java)
+        
+        if (data.startsWith("upi://", ignoreCase = true)) {
+            val uri = Uri.parse(data)
+            intent.putExtra("UPI_ID", uri.getQueryParameter("pa"))
+            intent.putExtra("PAYEE_NAME", uri.getQueryParameter("pn") ?: "Merchant")
+        } else if (data.contains("@")) {
+            // Case where QR is just the UPI ID string
+            intent.putExtra("UPI_ID", data)
+            intent.putExtra("PAYEE_NAME", "Recipient")
+        } else {
+            // General QR - maybe it's just a name or random text
+            Toast.makeText(this, "Not a valid UPI QR: $data", Toast.LENGTH_SHORT).show()
+            return 
+        }
+
+        // Only launch if we have a UPI ID
+        if (intent.getStringExtra("UPI_ID") != null) {
+            startActivity(intent)
+            finish()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
-            if (allPermissionsGranted()) {
-                startCamera()
-            } else {
-                Toast.makeText(
-                    this,
-                    "Permissions not granted by the user.",
-                    Toast.LENGTH_SHORT
-                ).show()
-                finish()
-            }
+            if (allPermissionsGranted()) startCamera() else finish()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        scanner.close()
     }
 
     companion object {
-        private const val TAG = "ScanActivity"
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }

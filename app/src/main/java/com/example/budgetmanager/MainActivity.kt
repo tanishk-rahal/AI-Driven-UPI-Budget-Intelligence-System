@@ -26,16 +26,6 @@ import com.example.budgetmanager.ui.theme.BudgetManagerTheme
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
 
-    private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val data = result.data
-            val scannedData = data?.getStringExtra("scanned_data")
-            if (scannedData != null) {
-                Toast.makeText(this, "Scanned: $scannedData", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -48,8 +38,7 @@ class MainActivity : ComponentActivity() {
                     bottomBar = {
                         BottomNavBar(currentRoute = currentRoute) { route ->
                             if (route == BottomNavItem.Pay.route) {
-                                val intent = Intent(context, ScanActivity::class.java)
-                                scanLauncher.launch(intent)
+                                context.startActivity(Intent(context, ScanActivity::class.java))
                             } else {
                                 currentRoute = route
                             }
@@ -72,7 +61,9 @@ class MainActivity : ComponentActivity() {
                         item {
                             Spacer(modifier = Modifier.height(16.dp))
                             QuickPaymentSection(
-                                onScanQrClick = {},
+                                onScanQrClick = {
+                                    context.startActivity(Intent(context, ScanActivity::class.java))
+                                },
                                 onSendContactClick = {},
                                 onSendUpiClick = {}
                             )
